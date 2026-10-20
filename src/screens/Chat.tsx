@@ -431,6 +431,7 @@ export function Chat({
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
+  awaitStartupReady = false,
   promptControllerRef: promptControllerRefProp,
   renderScene,
   openHomeOnBoot,
@@ -564,6 +565,9 @@ export function Chat({
    * open the channel (headless scripts, bare embeds).
    */
   injectControllerRef?: React.RefObject<InjectController | null>
+  /** Explicit native launch preferences must be validated before the input
+   * appears: terminal controllers use the composer as a readiness signal. */
+  awaitStartupReady?: boolean
   /**
    * Show the workspace home screen as this session's first frame.
    *
@@ -7293,7 +7297,7 @@ export function Chat({
         <PromptInput
           key="prompt-input"
           channel={channel}
-          suspended={promptReplacementOpen}
+          suspended={promptReplacementOpen || (awaitStartupReady && channelReady === false)}
           // 选择器、搜索框或侧栏持有键盘焦点时，让对应输入框接管原生
           // 光标与 IME 锚点，避免主输入框在后续提交中抢回声明。
           cursorParking={overlay.kind === 'none' && sidePanel.focus !== 'panel'}

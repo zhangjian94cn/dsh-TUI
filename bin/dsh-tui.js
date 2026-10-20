@@ -1297,16 +1297,24 @@ const createRescueProfile = () => {
   return { kind: 'created' }
 }
 
+// Only application options before its literal delimiter belong to this launch.
+const hasExplicitLaunchOptions = args => args.slice(0, args.includes('--') ? args.indexOf('--') : args.length)
+  .some(arg => arg === '--model' || arg === '--effort' || arg.startsWith('--model=') || arg.startsWith('--effort='))
+
 // 首次启动的结算：signal 自杀透传；error 打印 launchFailed 后接 fallback
 // （TTY 询问进入安全模式，非 TTY 追加 safeHint）并以 1 收束；非零退出保留
 // profileExited 诊断、接 fallback 后按保真退出码收束。
-const settleFirstResult = async (result, firstArgs) => {
+const settleFirstResult = async (result, firstArgs, { allowSafeMode = true } = {}) => {
   if (result.kind === 'signal') {
     process.kill(process.pid, result.signal)
     return
   }
   if (result.kind === 'error') {
     console.error(msg('launchFailed')(result.error))
+    if (!allowSafeMode) {
+      process.exit(1)
+      return
+    }
     if (isInteractive()) {
       if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
     } else {
@@ -1317,6 +1325,10 @@ const settleFirstResult = async (result, firstArgs) => {
   }
   if (result.code !== 0) {
     console.error(msg('profileExited')(result.code))
+    if (!allowSafeMode) {
+      process.exit(result.code)
+      return
+    }
     if (isInteractive()) {
       if (await askSafeEntry(result.code)) {
         process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
@@ -1711,10 +1723,10 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     // 没有 dsh CLI：安全模式与排查提示都指向不存在的 `dsh --profile`（DSH 内核下
     // 入口已打印 noDsh），原样退出。
     if (result.kind === 'exit' && result.code !== 0 && !(await probeDsh())) process.exit(result.code)
-    settleFirstResult(result, firstArgs)
+    settleFirstResult(result, firstArgs, { allowSafeMode: !hasExplicitLaunchOptions(args) })
   } else {
     // `dsh --profile` 出口：hostArgs，或入口被关闭的非默认路径。
     await requireDsh()
-    settleFirstResult(await startDshSession(firstArgs), firstArgs)
+    settleFirstResult(await startDshSession(firstArgs), firstArgs, { allowSafeMode: !hasExplicitLaunchOptions(args) })
   }
 }

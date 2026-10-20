@@ -186,8 +186,9 @@ Safe mode: [Getting started](docs/getting-started.en.md).
 For the DSH backend, `dsh-tui --model ark/kimi3 --effort high "Implement the task"`
 selects the provider/model route and native effort for this startup session only.
 The route and effort are validated against the provider's model catalog before
-the first task; missing values, unknown models, unavailable catalogs and
-unsupported efforts fail explicitly instead of falling back. Use the route IDs
+the input opens, including launches without a first prompt. Missing values,
+unknown models, unavailable catalogs and unsupported efforts exit nonzero
+without entering safe mode. Use the route IDs
 shown by `/model`; effort IDs depend on that model. Either flag may also use
 `--model=provider/model` or `--effort=level`. With `--resume <id>`, explicit flags
 override that DSH session's recorded route for this process; without flags,

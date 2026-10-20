@@ -674,6 +674,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // preference on CREATE only — a resumed session keeps the route its own
   // log records (last request/header), matching the preset rule.
   const launchPreferences = startupPreferencesFromCmdlineArgs(cmdlineArgsOf(ctx) ?? process.argv.slice(2))
+  const hasLaunchPreferences = launchPreferences.model !== undefined || launchPreferences.effort !== undefined
   const configuredRoute = {
     provider: config.provider,
     model: config.model,
@@ -917,7 +918,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // in /kernel is then one Enter away from installing what is missing.
   // Explicit choices (flag/Config/handoff) and explicit resume targets keep
   // the hard failure: silently swapping what the user named would be worse.
-  if (backendChoice !== 'dsh' && (launchPreferences.model !== undefined || launchPreferences.effort !== undefined)) {
+  if (backendChoice !== 'dsh' && hasLaunchPreferences) {
     throw new Error('dsh-tui: --model and --effort launch options currently require the dsh backend')
   }
   let backendStart: Awaited<ReturnType<typeof openBackendStartup>> | undefined
@@ -2574,7 +2575,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * and opens straight into its conversation.
    */
   const dshBoot = backendStart === undefined
-  const noResume = isLandingLaunch({ launchSessionId: bootSessionId, initialPrompt })
+  const noResume = !hasLaunchPreferences && isLandingLaunch({ launchSessionId: bootSessionId, initialPrompt })
   const openHomeOnBoot = dshBoot && !homeSeen && noResume && requestedWorkspace === undefined
   /**
    * The launchpad is NOT one-shot the way the workspace home is: every
@@ -2605,6 +2606,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     questionStore,
     approvalStore: panelApprovals,
     injectControllerRef,
+    awaitStartupReady: hasLaunchPreferences,
     openHomeOnBoot,
     launchpadOnBoot,
     onboardingOnBoot,
@@ -2974,6 +2976,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         refreshLastRunRecord()
       } catch (error) {
         logForDebugging(`dsh-tui: DSH session failed to open (${error instanceof Error ? error.message : String(error)})`)
+        // Explicit launch configuration is a process contract: a caller must
+        // never mistake a recoverable error screen for a ready agent.
+        if (error instanceof StartupPreferencesError) {
+          settleDshStartup?.reject(error)
+          handleStartupError(ctx, error)
+          return
+        }
         // A composition that fails reports itself (its row names the report).
         if (!await compositionSettled) return
         settleDshStartup?.reject(error)

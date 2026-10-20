@@ -319,7 +319,7 @@ const cleanManifest = {
   mkdirSync(pkgDir, { recursive: true })
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: PACKAGE, version: ownVersion }))
   // The stub dsh is no host the entry could load: keep DSH on `dsh --profile`.
-  const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', DSH_TUI_HOST_ENTRY: '0', ...env })
+  const runFb = (env = {}, args = []) => run(args, { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', DSH_TUI_HOST_ENTRY: '0', ...env })
   {
     const r = runFb()
     // 判「有没有 safe 提示」必须断真正的提示串：沙箱临时目录叫 verify-safe-*，
@@ -337,6 +337,14 @@ const cleanManifest = {
   {
     const r = runFb({ DSH_STUB_PROFILE_EXIT: '42', DSH_TUI_LANG: 'en' })
     check('fallback: safeHint 双语', r.stderr.includes('Run dsh-tui safe'), `status=${r.status}`)
+  }
+  for (const args of [['--model', 'ark/kimi3'], ['--effort=high'], ['--model']]) {
+    const r = runFb({ DSH_STUB_PROFILE_EXIT: '42' }, args)
+    check(`explicit launch ${args.join(' ')}: nonzero status is preserved without safe fallback`, r.status === 42 && r.stderr.includes('退出码 42') && !r.stderr.includes('dsh-tui safe'), r.stderr)
+  }
+  {
+    const r = runFb({ DSH_STUB_PROFILE_EXIT: '42' }, ['--', '--model', 'literal'])
+    check('literal --model prompt keeps ordinary safe fallback', r.status === 42 && r.stderr.includes('dsh-tui safe'), r.stderr)
   }
   {
     // --backend 的闭集校验在 P0 放宽成 id 语法校验（D1）：合法但没装的 id
@@ -369,6 +377,30 @@ const cleanManifest = {
     const r = runFb({ DSH_STUB_PROFILE_SIGNAL: 'SIGINT' })
     check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('dsh-tui safe'), `signal=${r.signal}`)
   }
+}
+
+// The real result handler must not ask a TTY user to continue after an explicit
+// configuration failed. No interactive menu or business/model call is made.
+{
+  const source = readFileSync(bin, 'utf8')
+  const from = source.indexOf('const hasExplicitLaunchOptions = ')
+  const to = source.indexOf('// 首次运行自举：', from)
+  if (from < 0 || to < from) throw new Error('strict launch settlement section not found')
+  const exits = []
+  let asks = 0
+  const handler = new vm.Script(`(function () {\n${source.slice(from, to)}\nreturn { settleFirstResult, hasExplicitLaunchOptions }\n})()`).runInNewContext({
+    process: { exit: code => exits.push(code) },
+    console: { error: () => undefined },
+    msg: () => value => String(value),
+    isInteractive: () => true,
+    askSafeEntry: async () => { asks++; return false },
+  })
+  await handler.settleFirstResult({ kind: 'exit', code: 42 }, [], { allowSafeMode: false })
+  await handler.settleFirstResult({ kind: 'error', error: 'spawn refused' }, [], { allowSafeMode: false })
+  check('explicit startup failures never ask a TTY safe-mode question', asks === 0 && exits.join(',') === '42,1', JSON.stringify({ asks, exits }))
+  await handler.settleFirstResult({ kind: 'exit', code: 1 }, [])
+  check('ordinary startup failure still asks the TTY safe-mode question', asks === 1 && exits.at(-1) === 1)
+  check('literal launch flags after -- are excluded', !handler.hasExplicitLaunchOptions(['--', '--effort=high']) && handler.hasExplicitLaunchOptions(['--model', 'ark/kimi3', '--', '--effort=high']))
 }
 
 // --- 安全重试读最后运行记录 ------------------------------------------------------

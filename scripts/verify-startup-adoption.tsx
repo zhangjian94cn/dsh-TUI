@@ -38,6 +38,7 @@ import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import type { ChannelLaunchOptions } from '../src/dsh-adapter/channel.js'
 import type { SessionSummary } from '../src/adapter/ports/channel-session.js'
 import type { PromptController } from '../src/components/PromptInput.js'
+import type { InjectController } from '../src/dsh-adapter/inject-channel.js'
 
 setLang('en')
 let passed = 0
@@ -273,8 +274,8 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed', sessionId: string, fullscreen = false, columns = 100, covered = false, outcome: 'adoption' | 'new' = 'adoption'): Promise<void> {
-  const label = (text: string): string => `${surface}${covered ? ' covered' : ''}${outcome === 'new' ? ' /new' : ''} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} cols: ${text}`
+async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed', sessionId: string, fullscreen = false, columns = 100, covered = false, outcome: 'adoption' | 'new' | 'failure' = 'adoption', awaitStartupReady = false): Promise<void> {
+  const label = (text: string): string => `${surface}${awaitStartupReady ? ' explicit configuration' : ''}${covered ? ' covered' : ''}${outcome === 'new' ? ' /new' : ''} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} cols: ${text}`
   const open = deferred()
   const channel = createChannel(ctx, createStartingSession('claude', process.cwd()), { ...launch(open.promise), cwd: process.cwd() })
   const COLS = columns
@@ -290,6 +291,7 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
   const stdout = new FakeStdout()
   const screen = (): string => viewportLines(term, ROWS).join('\n')
   const controllerRef: { current: PromptController | null } = { current: null }
+  const injectionRef: { current: InjectController | null } = { current: null }
   const chat = React.createElement(Chat, {
     channel: channel as never,
     questionStore: new QuestionStore(),
@@ -298,6 +300,8 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
     fullscreen,
     trajectorySeen: true,
     promptControllerRef: controllerRef,
+    injectControllerRef: injectionRef,
+    awaitStartupReady,
     // The composition root's kernel list: the notices name the kernel by its
     // short label ("Claude"), not the backend id.
     kernelEntries: kernelEntriesOf(listBackends()),
@@ -329,6 +333,26 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
   try {
     // 固定窗:pacing the key handlers attach after the first frame.
     await sleep(300)
+    if (awaitStartupReady) {
+      check(label('pending configuration exposes no composer marker or controller'), controllerRef.current === null && !screen().includes('❯'), screen())
+      await typeLine('must not queue')
+      stdin.write('\r')
+      injectionRef.current?.append('must not inject')
+      injectionRef.current?.submit()
+      check(label('neither keyboard nor external injection reaches a pending session'), real.submits.length === 0 && controllerRef.current === null && !screen().includes('must not'), screen())
+      if (outcome === 'failure') {
+        open.reject(new Error('catalog refused'))
+        check(label('failed validation stays without an input'), await settled(() => channel.startupFailure !== undefined && screen().includes('catalog r')) && controllerRef.current === null && !screen().includes('❯'), screen())
+        return
+      }
+      open.resolve({ session: real, history: [], route: { provider: 'fixture', model: 'READY' } })
+      check(label('the composer opens only after adoption'), await settled(() => channel.ready && controllerRef.current !== null && screen().includes('❯')), screen())
+      check(label('early input was not queued'), controllerRef.current?.text?.() === '' && real.submits.length === 0, screen())
+      await typeLine('business task')
+      stdin.write('\r')
+      check(label('only the post-validation task is submitted'), await settled(() => real.submits.length === 1) && real.submits[0]?.input.text === 'business task', JSON.stringify(real.submits))
+      return
+    }
     if (surface === 'launchpad-failed') {
       // A failed open closes the landing page: the failure row and its /new
       // hint are in the transcript it covered; the draft moves along.
@@ -424,8 +448,10 @@ for (const fullscreen of [false, true]) {
   for (const columns of [100, 42]) {
     await screenCase('composer', '77777777-7777-4777-8777-777777777777', fullscreen, columns)
     await screenCase('launchpad', '88888888-8888-4888-8888-888888888888', fullscreen, columns)
+    await screenCase('composer', '77777777-7777-4777-8777-777777777777', fullscreen, columns, false, 'adoption', true)
   }
 }
+await screenCase('composer', '99999999-9999-4999-8999-999999999999', true, 42, false, 'failure', true)
 await screenCase('composer', '77777777-7777-4777-8777-777777777777', true, 42, true)
 await screenCase('launchpad', '88888888-8888-4888-8888-888888888888', true, 42, false, 'new')
 await screenCase('composer', '77777777-7777-4777-8777-777777777777', false, 100, false, 'new')
