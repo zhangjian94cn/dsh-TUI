@@ -369,6 +369,22 @@ function mountHook(initial: StatusInput) {
 
 const flush = async (): Promise<void> => { await new Promise<void>(resolve => setImmediate(resolve)) }
 
+// A startup placeholder cannot accept terminal input. Even a projected idle
+// status must wait for the native adoption gate before advertising readiness.
+{
+  const { instance, set, reports } = mountHook(statusInput({ status: 'starting', ready: false }))
+  await flush()
+  assert.deepEqual(reports(), [])
+  set(statusInput({ status: 'idle', ready: false }))
+  await flush()
+  assert.deepEqual(reports(), [])
+  set(statusInput({ status: 'idle', ready: true }))
+  await flush()
+  assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
+  console.log('  ok - startup reports no idle before native adoption')
+  instance.unmount()
+}
+
 // idle at mount
 {
   const { instance, reports } = mountHook(statusInput())
@@ -528,6 +544,10 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   /** A mount whose channel IS a real projector state. */
   const mountProjection = (history: readonly AgentEvent[] = [], initialLive: readonly AgentEvent[] = []) => {
     const rig = createProjectorHarness()
+    // This fixture owns an adopted session; a bare projector alone starts
+    // before that channel binding and has no accepting input yet.
+    rig.state.status = 'idle'
+    rig.state.ready = true
     rig.apply([{ type: 'session.title', title: 'sess', source: 'auto' }] as readonly AgentEvent[])
     const router = createSessionBatchRouter({
       state: rig.state as ChannelState,

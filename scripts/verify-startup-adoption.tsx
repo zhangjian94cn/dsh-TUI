@@ -281,11 +281,27 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
   const COLS = columns
   const ROWS = 30
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 200, allowProposedApi: true })
+  const programReports: { state: string; ready: boolean; inputAvailable: boolean }[] = []
+  let injectedAtIdle = false
   class FakeStdout extends Writable {
     columns = COLS
     rows = ROWS
     isTTY = true
-    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void { term.write(String(chunk), callback) }
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      const text = String(chunk)
+      for (const match of text.matchAll(/\x1b\]7501;state=([^:\x1b]+)[^\x1b]*\x1b\\/g)) {
+        const state = match[1]!
+        programReports.push({ state, ready: channel.ready, inputAvailable: controllerRef.current !== null })
+        // A terminal client reacts to the native report immediately, without
+        // a delay or a separate readiness probe.
+        if (state === 'idle' && awaitStartupReady && outcome === 'adoption' && !injectedAtIdle) {
+          injectedAtIdle = true
+          injectionRef.current?.append('business task')
+          injectionRef.current?.submit()
+        }
+      }
+      term.write(text, callback)
+    }
   }
   const stdin = new FakeStdin()
   const stdout = new FakeStdout()
@@ -335,6 +351,7 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
     await sleep(300)
     if (awaitStartupReady) {
       check(label('pending configuration exposes no composer marker or controller'), controllerRef.current === null && !screen().includes('❯'), screen())
+      check(label('pending configuration emits no false idle report'), programReports.length === 0, JSON.stringify(programReports))
       await typeLine('must not queue')
       stdin.write('\r')
       injectionRef.current?.append('must not inject')
@@ -343,14 +360,13 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
       if (outcome === 'failure') {
         open.reject(new Error('catalog refused'))
         check(label('failed validation stays without an input'), await settled(() => channel.startupFailure !== undefined && screen().includes('catalog r')) && controllerRef.current === null && !screen().includes('❯'), screen())
+        check(label('failed validation never advertises idle'), programReports.length === 0, JSON.stringify(programReports))
         return
       }
       open.resolve({ session: real, history: [], route: { provider: 'fixture', model: 'READY' } })
       check(label('the composer opens only after adoption'), await settled(() => channel.ready && controllerRef.current !== null && screen().includes('❯')), screen())
-      check(label('early input was not queued'), controllerRef.current?.text?.() === '' && real.submits.length === 0, screen())
-      await typeLine('business task')
-      stdin.write('\r')
-      check(label('only the post-validation task is submitted'), await settled(() => real.submits.length === 1) && real.submits[0]?.input.text === 'business task', JSON.stringify(real.submits))
+      check(label('idle is emitted only with the adopted session and registered input'), programReports.some(row => row.state === 'idle') && programReports.every(row => row.ready && row.inputAvailable), JSON.stringify(programReports))
+      check(label('a task injected at the first idle reaches the native session exactly once'), await settled(() => real.submits.length === 1) && real.submits[0]?.input.text === 'business task', JSON.stringify(real.submits))
       return
     }
     if (surface === 'launchpad-failed') {

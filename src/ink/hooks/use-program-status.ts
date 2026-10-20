@@ -27,6 +27,8 @@ export type ProgramBlockedPrompt = {
  * and its live batch router into a real mount.
  */
 export type ProgramStatusChannel = {
+  /** False until the real session is adopted; no input can be accepted yet. */
+  ready?: boolean
   /** The backend can remain running after its replayed rows are settled. */
   status: 'starting' | 'idle' | 'running' | 'disposed'
   /** A turn is running. */
@@ -105,10 +107,13 @@ export function useProgramStatus(input: ProgramStatusInput): void {
   })
 
   const { channel, blocked, enabled } = input
-  const { status, working, turnOutcome, liveTurnEnds, agentBindingGeneration, sessionTitle, sessionId } = channel
+  const { ready, status, working, turnOutcome, liveTurnEnds, agentBindingGeneration, sessionTitle, sessionId } = channel
 
   useEffect(() => {
-    if (!enabled || !writeRaw) return
+    // The first frame mounts before the native session and input controller.
+    // Reporting idle for that placeholder invites terminal clients to inject
+    // a task before there is any input that can accept it.
+    if (!enabled || !writeRaw || ready === false || status === 'starting') return
 
     // Adopting a different session starts a fresh latch; the projected
     // outcome now describes that session's past, not work observed in this one.
@@ -152,5 +157,5 @@ export function useProgramStatus(input: ProgramStatusInput): void {
     if (sequence === '' || (sequence === lastReport?.sequence && liveTurnEnds === lastReport?.liveTurnEnds)) return
     lastReportRef.current = { sequence, liveTurnEnds }
     writeRaw(sequence)
-  }, [enabled, status, working, turnOutcome, liveTurnEnds, agentBindingGeneration, blocked, sessionTitle, writeRaw, sessionId])
+  }, [enabled, ready, status, working, turnOutcome, liveTurnEnds, agentBindingGeneration, blocked, sessionTitle, writeRaw, sessionId])
 }
